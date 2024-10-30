@@ -1,0 +1,10 @@
+datasheets/
+
+main.asm
+main.ihx
+main.lk
+main.lst
+main.map
+main.rel
+main.sym
+main.rst

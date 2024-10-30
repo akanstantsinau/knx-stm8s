@@ -1,0 +1,3 @@
+[submodule "deps/libstm8s"]
+	path = deps/libstm8s
+	url = https://github.com/akanstantsinau/libstm8s
