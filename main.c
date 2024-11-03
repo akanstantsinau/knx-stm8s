@@ -4,9 +4,14 @@
 
 #include "ncn5120.h"
 
-typedef uint8_t timer;
+typedef uint16_t timer;
 
 #define F_CPU 2000000UL
+
+// Need thins constant to adjust some addresses and timings to work
+// in ucsim simulator.
+// Should be undefined before flushing to target device.
+#define UCSIM
 
 // *********  LED settings *******************
 #define LED_PIN     GPIO_ODR_5
@@ -16,15 +21,24 @@ typedef uint8_t timer;
 
 
 // ******** KNX constants ********************
+#ifdef UCSIM
+#define KNX_FRAME_SILENCE_THRESHOLD 12
+#define TIMER_PRESCALER 15
+// ucsim does not support WFI at the moment of writing this code.
+#define WAIT_INSTRUCTION "nop\n"
+#else
 // Threshold should be 2.6ms
 // We calculate it on timer with prescaler 128 and closk frequency 2000000 (F_CPU)
-#define KNX_FRAME_SILENCE_THRESHOLD ((uint8_t)(0.0026 * (F_CPU >> 7)))
+#define KNX_FRAME_SILENCE_THRESHOLD (0.0026 * (F_CPU >> 7))
+#define TIM2_TYPE2
+#define TIMER_PRESCALER 7
+#define WAIT_INSTRUCTION "wfi\n"
+#endif //UCSIM
 
 #define RECEIVE_BUFFER_LENGTH 100
 #define SEND_BUFFER_LENGTH 100
 
 volatile uint8_t receive_buffer[RECEIVE_BUFFER_LENGTH];
-volatile uint8_t receive_buf_start_pos = 0;
 volatile uint8_t receive_buf_end_pos = 0;
 volatile uint8_t receive_knx_frame_in_progress = 0;
 
@@ -33,7 +47,7 @@ volatile uint8_t send_buf_start_pos = 0;
 volatile uint8_t send_buf_end_pos = 0;
 
 inline timer get_time(void) {
-    return TIM4->CNTR;
+    return TIM2->CNTRH << 8 | TIM2->CNTRL;
 }
 
 inline int uart_transmit_data_register_empty() {
@@ -65,36 +79,46 @@ uint8_t is_data_start_ind(uint8_t data) {
     return data & (1 << 7 | 1 << 4) && ~data & (1 << 6 | 1 << 1 | 1);
 }
 
+void process_knx_frame(uint8_t* data, uint8_t length) {
+    UART1->DR = length;
+}
+
+uint8_t knx_ready = 0;
+
 void store_byte(uint8_t data) {
-    receive_buffer[receive_buf_end_pos++] = data;
+    
     if (receive_buf_end_pos == RECEIVE_BUFFER_LENGTH) {
     	receive_buf_end_pos = 0;
     }
 
-    if(!receive_knx_frame_in_progress && is_data_start_ind(data)) {
-        receive_knx_frame_in_progress = 1;
+    if(!receive_knx_frame_in_progress) {
+	if(data == U_RESET_IND) {
+	    knx_ready = 1;
+	    led_on();
+	} else if(is_data_start_ind(data)) {
+            receive_buf_end_pos = 0;
+	    receive_buffer[receive_buf_end_pos++] = data;
+	    receive_knx_frame_in_progress = 1;
+            last_b = get_time();
+	}
+    } else {
+	receive_buffer[receive_buf_end_pos++] = data;
+        if(get_time() - last_b > KNX_FRAME_SILENCE_THRESHOLD) {
+            receive_knx_frame_in_progress = 0;
+            process_knx_frame(receive_buffer, receive_buf_end_pos);
+	    receive_buf_end_pos = 0;
+        } else {
+            last_b = get_time();
+	}
     }
-    if(receive_knx_frame_in_progress && get_time() - last_b > KNX_FRAME_SILENCE_THRESHOLD) {
-        receive_knx_frame_in_progress = 0;
-        {__asm__("SIM\n");}
-    }
-    last_b = get_time();
-}
-uint8_t uart_data_available() {
-    return receive_buf_end_pos != receive_buf_start_pos && !receive_knx_frame_in_progress;
-}
-uint8_t uart_get_byte() {
-    uint8_t data = receive_buffer[receive_buf_start_pos++];
-    if (receive_buf_start_pos == RECEIVE_BUFFER_LENGTH) {
-    	receive_buf_start_pos = 0;
-    }
-    return data;
 }
 
-static inline void delay_ms(uint16_t ms) {
-    uint32_t i;
-    for (i = 0; i < ((F_CPU / 18000UL) * ms); i++)
-        __asm__("nop");
+uint8_t uart_data_available() {
+    return receive_buf_end_pos != 0 && !receive_knx_frame_in_progress;
+}
+
+uint8_t uart_get_byte() {
+    return receive_buffer[0];
 }
 
 static inline void uart_init() {
@@ -130,12 +154,6 @@ static inline void led_off() {
 static inline void led_on() {
     GPIOB->ODR &= ~LED_PIN;
 }
-//void uart_transmit_data_interrupt_handler(void) __interrupt(UART1_T_TXE_vector) {
-    //if  (uart_transmit_data_register_empty()) {
-    //    uart_transmit_byte();
-    //}
-//    UART_SR &= ~(UART_SR_TC | UART_SR_TXE);
-//}
 
 void uart_receive_data(void) __interrupt(UART1_RX_IRQn){
     if (UART1->SR & UART_SR_RXNE) {
@@ -145,17 +163,12 @@ void uart_receive_data(void) __interrupt(UART1_RX_IRQn){
 
 
 void timer_init(void) {
-    TIM4->CR1 = TIM_CR1_CEN;              
-    TIM4->PSCR = 5; //prescaler set to 128
-    TIM4->EGR = TIM_EGR_UG;
-}
-
-void process_knx_frame(uint8_t control_byte) {
-
+    TIM2->PSCR = TIMER_PRESCALER; 
+    TIM2->EGR |= TIM_EGR_UG;
+    TIM2->CR1 |= TIM_CR1_CEN;              
 }
 
 void main() {
-    uint8_t knx_ready = 0;
     
     uart_init();
     // Going to use 8-bit UART mode, frame end with silence, no CRC-CCITT
@@ -170,19 +183,7 @@ void main() {
     uart_send_bytes(1, &data);
 
     while (1) {
-	if(uart_data_available() ){
-	    uint8_t response = uart_get_byte();
-            // process data from KNX module here.
-	    if(response == U_RESET_IND) {
-	        knx_ready = 1;
-		led_on();
-	    } else if(is_data_start_ind(response)) {
-	        process_knx_frame(response);
-                {__asm__("RIM\n");}
-	    }
-	} else {
-            {__asm__("wfi\n");}
-	}
+        {__asm__(WAIT_INSTRUCTION);}
     }
 }
 
