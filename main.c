@@ -3,6 +3,7 @@
 #include<stm8s003.h>
 
 #include "ncn5120.h"
+#include "knx.h"
 
 typedef uint16_t timer;
 
@@ -79,10 +80,6 @@ uint8_t is_data_start_ind(uint8_t data) {
     return data & (1 << 7 | 1 << 4) && ~data & (1 << 6 | 1 << 1 | 1);
 }
 
-void process_knx_frame(uint8_t* data, uint8_t length) {
-    UART1->DR = length;
-}
-
 uint8_t knx_ready = 0;
 
 void store_byte(uint8_t data) {
@@ -105,7 +102,7 @@ void store_byte(uint8_t data) {
 	receive_buffer[receive_buf_end_pos++] = data;
         if(get_time() - last_b > KNX_FRAME_SILENCE_THRESHOLD) {
             receive_knx_frame_in_progress = 0;
-            process_knx_frame(receive_buffer, receive_buf_end_pos);
+            receive_knx_frame(receive_buffer, receive_buf_end_pos);
 	    receive_buf_end_pos = 0;
         } else {
             last_b = get_time();
