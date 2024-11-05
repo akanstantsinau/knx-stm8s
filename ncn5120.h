@@ -9,6 +9,7 @@
 #define U_BUSMON_REQ 0x05
 #define U_SET_ADDRESS_REQ 0xF1   // different on TP-UART
 #define U_L_DATA_OFFSET_REQ 0x08 //-0x0C
+#define U_L_DATA_START_REQ 0x80 
 #define U_SYSTEM_MODE 0x0D
 #define U_STOP_MODE_REQ 0x0E
 #define U_EXIT_STOP_MODE_REQ 0x0F

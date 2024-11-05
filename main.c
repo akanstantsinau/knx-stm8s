@@ -4,6 +4,7 @@
 
 #include "ncn5120.h"
 #include "knx.h"
+#include "uart.h"
 
 typedef uint16_t timer;
 
@@ -37,41 +38,13 @@ typedef uint16_t timer;
 #endif //UCSIM
 
 #define RECEIVE_BUFFER_LENGTH 100
-#define SEND_BUFFER_LENGTH 100
 
 volatile uint8_t receive_buffer[RECEIVE_BUFFER_LENGTH];
 volatile uint8_t receive_buf_end_pos = 0;
 volatile uint8_t receive_knx_frame_in_progress = 0;
 
-volatile uint8_t send_buffer[SEND_BUFFER_LENGTH];
-volatile uint8_t send_buf_start_pos = 0;
-volatile uint8_t send_buf_end_pos = 0;
-
 inline timer get_time(void) {
     return TIM2->CNTRH << 8 | TIM2->CNTRL;
-}
-
-inline int uart_transmit_data_register_empty() {
-	return UART1->SR & UART_SR_TXE;
-}
-
-
-uint8_t uart_transmit_byte() {
-    uint8_t result = 0;
-    {__asm__("SIM\n");}
-    if(uart_transmit_data_register_empty() && send_buf_start_pos != send_buf_end_pos ){
-       UART1->DR = send_buffer[send_buf_start_pos++];
-       send_buf_start_pos %= SEND_BUFFER_LENGTH;
-       result = 1;
-    }
-    {__asm__("RIM\n");}
-    return result; 
-}
-void uart_send_bytes(uint8_t size, uint8_t* data) {
-    for(uint8_t i = 0 ; i < size ; i++) {
-        while(!uart_transmit_data_register_empty());
-	UART1->DR = data[i];
-    }
 }
 
 volatile timer last_b;
@@ -175,9 +148,8 @@ void main() {
 
     {__asm__("RIM\n");}
 
-    uint8_t data = U_RESET_REQ;
 
-    uart_send_bytes(1, &data);
+    uart_send_byte(U_RESET_REQ);
 
     while (1) {
         {__asm__(WAIT_INSTRUCTION);}
